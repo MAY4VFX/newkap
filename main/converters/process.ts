@@ -24,6 +24,11 @@ export interface ProcessOptions {
   shouldTrack?: boolean;
   startTime?: number;
   endTime?: number;
+  // The output plays at this multiple of the trimmed range's original
+  // duration, so the expected output duration (used to gauge progress from
+  // ffmpeg's own `time=`, which reports output timestamps) has to be divided
+  // by it — otherwise the bar stalls at 1/speed for a sped-up export.
+  speed?: number;
   onProgress?: (progress: number, estimate?: string) => void;
 }
 
@@ -40,6 +45,7 @@ const createProcess = (mode: Mode) => {
       shouldTrack,
       startTime = 0,
       endTime = 0,
+      speed = 1,
       onProgress
     } = {
       ...defaultProcessOptions,
@@ -62,7 +68,7 @@ const createProcess = (mode: Mode) => {
         runner.kill();
       });
 
-      const durationMs = moment.duration(endTime - startTime, 'seconds').asMilliseconds();
+      const durationMs = moment.duration(endTime - startTime, 'seconds').asMilliseconds() / speed;
 
       let stderr = '';
       runner.stderr?.setEncoding('utf8');

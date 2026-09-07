@@ -6,19 +6,25 @@ import {settings} from '../common/settings';
 import os from 'os';
 import {Encoding, Format} from '../common/types';
 import fs from 'fs';
-import {isHardwareEncoderAvailable} from '../utils/hardware-encoding';
 
-// VideoToolbox's `-q:v` is a 1-100 quality target (higher = bigger/better),
-// unrelated to libx264/libx265's CRF scale. Measured against this project's
-// software output on real screen recordings: VideoToolbox needs noticeably
-// more bits than libx264/libx265 for the same SSIM on this kind of flat,
-// low-motion UI content (hardware encoders are tuned for camera video, not
-// screen captures), so matching software file size 1:1 costs visible quality.
-// 50 lands on a middle ground verified by measurement — SSIM ~0.98 against
-// the source (software preset lands ~0.996-0.999) at roughly 2.5-4x the
-// software file size, instead of the 5-7x blowup a naive CBR/default bitrate
-// produces. See newkap#2 for the numbers.
-const HARDWARE_QUALITY = '50';
+// Encoder presets, chosen by measurement on a real 2702x1510 screen recording
+// (52.8s), comparing wall time, file size and SSIM against the source:
+//
+//   x264 medium (the old default)  48.7s  2.61MB  0.9993
+//   x264 veryfast                  17.1s  2.14MB  0.9975
+//   h264_videotoolbox q50           8.9s  7.25MB  0.9842
+//   x265 medium (the old default) 105.7s  1.85MB  0.9964
+//   x265 superfast                 73.1s  1.74MB  0.9926
+//   hevc_videotoolbox q50           9.7s  6.08MB  0.9834
+//
+// VideoToolbox loses on every axis but raw speed here: hardware encoders are
+// tuned for camera footage, and on flat, low-motion UI content they need ~3x
+// the bits for *worse* SSIM. `-realtime 0`/`-prio_speed 0` changed nothing.
+// The time was never really about software encoding — it was the `medium`
+// preset, which buys compression this content doesn't need. Dropping the
+// preset is both faster and smaller, so there is no trade to make.
+const H264_PRESET = 'veryfast';
+const HEVC_PRESET = 'superfast';
 
 // GIF export: trim the clip with ffmpeg if a range is selected, then encode it
 // with gifski. gifski reads video directly (its bundled binary statically links
@@ -154,18 +160,15 @@ const convertToMp4 = PCancelable.fn(async (options: ConvertOptions, onCancel: PC
     return remuxProcess;
   }
 
-  const canUseHardware = await isHardwareEncoderAvailable('h264_videotoolbox');
-
   const conversionProcess = convert(options.outputPath, processOptions, conditionalArgs(
     // See the comment in convertToGif: an output-side -ss/-to would trim
     // *after* -filter:v once that's present, so it has to move before -i.
     {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
     '-i', options.inputPath,
     '-r', options.fps.toString(),
-    {
-      args: ['-c:v', 'h264_videotoolbox', '-q:v', HARDWARE_QUALITY],
-      if: canUseHardware
-    },
+    '-c:v', 'libx264',
+    '-preset', H264_PRESET,
+    '-crf', '23',
     {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
     {args: ['-filter:a', buildAtempoFilter(options.speed)], if: hasSpeed && !options.shouldMute},
     {
@@ -280,8 +283,6 @@ const convertToAv1 = (options: ConvertOptions) => {
 const convertToHevc = PCancelable.fn(async (options: ConvertOptions, onCancel: PCancelable.OnCancelFunction) => {
   const hasSpeed = options.speed !== 1;
   const shouldTrim = options.shouldCrop || !areDimensionsEven(options);
-  const canUseHardware = await isHardwareEncoderAvailable('hevc_videotoolbox');
-
   const conversionProcess = convert(options.outputPath, {
     onProgress: (progress, estimate) => {
       options.onProgress('Converting', progress, estimate);
@@ -293,14 +294,8 @@ const convertToHevc = PCancelable.fn(async (options: ConvertOptions, onCancel: P
     {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
     '-i', options.inputPath,
     '-r', options.fps.toString(),
-    {
-      args: ['-c:v', 'hevc_videotoolbox', '-q:v', HARDWARE_QUALITY],
-      if: canUseHardware
-    },
-    {
-      args: ['-c:v', 'libx265', '-preset', 'medium'],
-      if: !canUseHardware
-    },
+    '-c:v', 'libx265',
+    '-preset', HEVC_PRESET,
     '-c:a', 'libopus',
     '-tag:v', 'hvc1', // Metadata for macOS
     {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},

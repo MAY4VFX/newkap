@@ -11,7 +11,7 @@ import {almostEquals} from './helpers/assertions';
 import {getFormatExtension} from '../main/common/constants';
 import {Except, SetOptional} from 'type-fest';
 import {mockImport} from './helpers/mocks';
-import {Format} from '../main/common/types';
+import {Encoding, Format} from '../main/common/types';
 
 const getRandomFileName = (ext: Format = Format.mp4) => `${uniqueString()}.${getFormatExtension(ext)}`;
 
@@ -116,6 +116,119 @@ test('mp4: non-retina', async t => {
   t.is(meta.encoding, 'h264');
 
   t.false(meta.hasAudio);
+});
+
+// MP4 remux fast path — when nothing about the stream actually changes, the
+// mp4 converter should repackage it with `-c copy` instead of re-encoding.
+
+test('mp4: remuxes instead of re-encoding when nothing changed', async t => {
+  const startedAt = Date.now();
+
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: false,
+    inputPath: input,
+    sourceEncoding: Encoding.h264,
+    sourceFps: 60,
+    fps: 60,
+    width: 2560,
+    height: 1440,
+    startTime: 0,
+    endTime: 106.78,
+    shouldCrop: false
+  });
+
+  const elapsedMs = Date.now() - startedAt;
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.is(meta.size.width, 2560);
+  t.is(meta.size.height, 1440);
+  t.is(meta.encoding, 'h264');
+  t.true(almostEquals(meta.duration, 106.78, 1));
+
+  // Re-encoding this fixture (2560x1440) takes several seconds even on the
+  // fast paths added in this change; a remux is a plain file copy and
+  // finishes in well under a second. A generous bound keeps this from being
+  // flaky while still proving the encode was skipped.
+  t.true(elapsedMs < 5000, `expected a remux to finish quickly, took ${elapsedMs}ms`);
+
+  // `-c copy` keeps the original bitstream, so only container/muxing
+  // overhead can move the file size — a re-encode of this clip lands at a
+  // very different size.
+  const inputSize = fs.statSync(input).size;
+  const outputSize = fs.statSync(t.context.outputPath).size;
+  t.true(
+    Math.abs(outputSize - inputSize) / inputSize < 0.1,
+    `expected output size (${outputSize}) close to input size (${inputSize})`
+  );
+});
+
+test('mp4: does not remux when the fps changes', async t => {
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: false,
+    inputPath: input,
+    sourceEncoding: Encoding.h264,
+    sourceFps: 60,
+    fps: 30,
+    width: 2560,
+    height: 1440,
+    startTime: 0,
+    endTime: 5,
+    shouldCrop: false
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  // A remux keeps the source's native ~60fps; only an actual re-encode
+  // resamples to the requested rate.
+  t.is(meta.fps, 30);
+});
+
+test('mp4: does not remux when muted', async t => {
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: true,
+    inputPath: retinaInput,
+    sourceEncoding: Encoding.h264,
+    sourceFps: 60,
+    fps: 60,
+    width: 3358,
+    height: 1874,
+    startTime: 0,
+    endTime: 5,
+    shouldCrop: false
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  // `-c copy` alone can't drop the audio track; if this were incorrectly
+  // remuxed, the source's audio stream would still be there.
+  t.false(meta.hasAudio);
+});
+
+test('mp4: does not remux when the source is not h264', async t => {
+  // The fixture is actually h264, so this only differs from the remux test
+  // above in the (claimed) source encoding — isolating that one gate. Output
+  // codec can't tell remux and re-encode apart here (both land on h264), so
+  // fall back to timing: a real encode of this clip takes several seconds,
+  // a remux finishes in well under one.
+  const startedAt = Date.now();
+
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: false,
+    inputPath: input,
+    sourceEncoding: Encoding.hevc,
+    sourceFps: 60,
+    fps: 60,
+    width: 2560,
+    height: 1440,
+    startTime: 0,
+    endTime: 106.78,
+    shouldCrop: false
+  });
+
+  const elapsedMs = Date.now() - startedAt;
+
+  t.true(elapsedMs > 1000, `expected a real encode to take a while, took ${elapsedMs}ms`);
 });
 
 // WEBM

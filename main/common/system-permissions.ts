@@ -1,37 +1,21 @@
 import {systemPreferences, shell, dialog, app} from 'electron';
 const {ensureDockIsShowing} = require('../utils/dock');
 
-// Safe wrapper for mac-screen-capture-permissions (unreliable on macOS Sonoma+)
-let hasScreenCapturePermission: () => boolean;
-let hasPromptedForPermission: () => boolean;
+// Screen-capture permission used to come from `mac-screen-capture-permissions`,
+// but its native addon ships prebuilds only for Electron ABI 103+ while this app
+// runs Electron 13 (ABI 89). The addon is therefore absent from the packaged
+// bundle, and every call threw MODULE_NOT_FOUND — which the catch in
+// `ensureScreenCapturePermissions` reported to the user as "cannot record the
+// screen", no matter how the System Settings toggle was set.
+//
+// Electron answers the same question itself, with no native dependency, and it
+// is already how the microphone check below works.
+const getScreenCaptureAccess = () => systemPreferences.getMediaAccessStatus('screen');
 
-const darwinMajor = Number.parseInt(require('os').release().split('.')[0], 10);
-const isSonomaOrNewer = darwinMajor >= 23;
+const hasScreenCapturePermission = () => getScreenCaptureAccess() === 'granted';
 
-if (isSonomaOrNewer) {
-  // On Sonoma+, mac-screen-capture-permissions can be unreliable.
-  // We still try to use it, but fall back gracefully.
-  try {
-    const macPerms = require('mac-screen-capture-permissions');
-    hasScreenCapturePermission = macPerms.hasScreenCapturePermission;
-    hasPromptedForPermission = macPerms.hasPromptedForPermission;
-  } catch (error) {
-    console.error('mac-screen-capture-permissions failed on Sonoma:', error);
-    // On failure, assume permission granted and let aperture handle errors
-    hasScreenCapturePermission = () => true;
-    hasPromptedForPermission = () => true;
-  }
-} else {
-  try {
-    const macPerms = require('mac-screen-capture-permissions');
-    hasScreenCapturePermission = macPerms.hasScreenCapturePermission;
-    hasPromptedForPermission = macPerms.hasPromptedForPermission;
-  } catch (error) {
-    console.error('mac-screen-capture-permissions failed to load:', error);
-    hasScreenCapturePermission = () => true;
-    hasPromptedForPermission = () => true;
-  }
-}
+// 'not-determined' means macOS has never put the prompt in front of the user.
+const hasPromptedForPermission = () => getScreenCaptureAccess() !== 'not-determined';
 
 let isDialogShowing = false;
 

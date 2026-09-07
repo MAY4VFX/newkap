@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - 'ci/**'
+      - 'feat/**'
+
+jobs:
+  build:
+    name: Build unsigned DMG (arm64)
+    # macos-13 was retired by GitHub and silently leaves jobs queued forever
+    # with no runner assigned (no error). macos-latest is arm64, so this is
+    # also now a native build instead of a cross-arch one.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build DMG
+        env:
+          # No Apple ID/notarization credentials are configured for this
+          # workflow, so skip codesigning entirely. electron-builder-notarize
+          # (the afterSign hook) already no-ops when it can't find notarization
+          # credentials, so it does not need to be disabled separately.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: yarn dist -m --arm64
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: newkap-arm64-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  test-gifski:
+    name: Test (gifski)
+    # The `gif:` tests in test/convert.ts exercise the vendored gifski
+    # binary (scripts/download-gifski.js), which only has a macOS build
+    # upstream (ImageOptim/gifski ships one universal darwin tar.xz, no
+    # Linux asset). Everything else runs on ubuntu in test.yml.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run gifski tests
+        run: yarn test:main --match='gif:*'

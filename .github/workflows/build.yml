@@ -27,21 +27,78 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Build DMG
+      - name: Build app (unsigned)
         env:
-          # No Apple ID/notarization credentials are configured for this
-          # workflow, so skip codesigning entirely. electron-builder-notarize
-          # (the afterSign hook) already no-ops when it can't find notarization
-          # credentials, so it does not need to be disabled separately.
+          # electron-builder's own signing step can't do ad-hoc signing (it
+          # only searches the keychain for a real "Developer ID
+          # Application:"-type identity, and finds none in CI); leave it
+          # skipping cleanly here and ad-hoc sign the .app ourselves below,
+          # same fix already verified by hand on a user's machine. The
+          # electron-builder-notarize afterSign hook still runs at this step
+          # and no-ops as before (no Apple credentials).
           CSC_IDENTITY_AUTO_DISCOVERY: false
         # -c.mac.target.arch=arm64: package.json's build.mac.target.arch is
         # [x64, arm64], which wins over the CLI's --arm64 shorthand, so
-        # without this override electron-builder builds (and this step
-        # uploads) an unrequested x64 DMG too.
+        # without this override electron-builder builds an unrequested x64
+        # app too. `-m dir` builds just the .app (no dmg/zip yet) so it can
+        # be signed before packaging.
+        run: |
+          yarn build
+          yarn electron-builder -m dir --arm64 -c.mac.target.arch=arm64
+
+      - name: Ad-hoc sign the app
+        # macOS on Apple Silicon refuses to run a completely unsigned app
+        # (it starts and is immediately killed, with no crash log) - it
+        # needs at least a valid ad-hoc signature. `-` is codesign's ad-hoc
+        # identity: no certificate needed, so this works the same in CI as
+        # it did fixing this by hand on the user's machine.
+        run: |
+          APP="dist/mac-arm64/NewKap.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Build DMG from the signed app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        # --prepackaged points electron-builder at the already-built (and
+        # now signed) .app instead of rebuilding/re-signing it, so the DMG
+        # is made from exactly the binary we just verified above.
         # --publish never: electron-builder detects CI and tries to check
         # GitHub for a matching draft release to publish to, which fails
         # outright without a GH_TOKEN. We're not publishing here.
-        run: yarn dist -m --arm64 -c.mac.target.arch=arm64 --publish never
+        run: >
+          yarn electron-builder -m dmg --arm64 -c.mac.target.arch=arm64
+          --prepackaged dist/mac-arm64/NewKap.app --publish never
+
+      - name: Verify the shipped DMG (mount, verify signature, best-effort launch)
+        run: |
+          set -euo pipefail
+
+          dmg=$(ls dist/*.dmg)
+          mount_dir=$(mktemp -d)
+          hdiutil attach "$dmg" -nobrowse -mountpoint "$mount_dir"
+          app=$(ls -d "$mount_dir"/*.app)
+
+          echo "Verifying code signature of $app (as shipped inside the DMG)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          # Best-effort past this point: the runner has a GUI session, but
+          # NewKap needs Screen Recording permission it can't be granted in
+          # unattended CI, so a launch that doesn't stay alive here isn't on
+          # its own proof of a bad signature - codesign --verify above is
+          # the real, blocking gate. This just adds a second data point.
+          set +e
+          open "$app"
+          sleep 5
+          if pgrep -f "$(basename "$app")/Contents/MacOS/NewKap" > /dev/null; then
+            echo "NewKap process is alive 5s after launch"
+          else
+            echo "::warning::NewKap process was not found 5s after launch (see step comments: not necessarily a signing problem in headless CI)"
+          fi
+          pkill -f "$(basename "$app")/Contents/MacOS/NewKap" 2>/dev/null
+          set -e
+
+          hdiutil detach "$mount_dir" -quiet
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4

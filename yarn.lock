@@ -722,11 +722,6 @@
   resolved "https://registry.yarnpkg.com/@types/estree/-/estree-0.0.50.tgz#1e0caa9364d3fccd2931c3ed96fdbeaa5d4cca83"
   integrity sha512-C6N5s2ZFtuZRj54k2/zyRhNDjJwwcViAM3Nbm8zjBpbqAdZ00mr0CFxvSKeO8Y/e03WVFLpQMdHYVfUd6SB+Hw==
 
-"@types/ffmpeg-static@^3.0.0":
-  version "3.0.1"
-  resolved "https://registry.yarnpkg.com/@types/ffmpeg-static/-/ffmpeg-static-3.0.1.tgz#1003f003624bcd2f569b56185a62dcbacd935c39"
-  integrity sha512-hEJdQMv/g1olk9qTiWqh23BfbKsDKE6Tc7DilNJWF1MgZsU9fYOPKrgQ448vfT7aP2Yt5re9vgJDVv9TXEoTyQ==
-
 "@types/fs-extra@^9.0.11":
   version "9.0.12"
   resolved "https://registry.yarnpkg.com/@types/fs-extra/-/fs-extra-9.0.12.tgz#9b8f27973df8a7a3920e8461517ebf8a7d4fdfaf"
@@ -3897,10 +3892,10 @@ fd-slicer@~1.1.0:
   dependencies:
     pend "~1.2.0"
 
-ffmpeg-static@^4.4.1:
-  version "4.4.1"
-  resolved "https://registry.yarnpkg.com/ffmpeg-static/-/ffmpeg-static-4.4.1.tgz#ec465f61f9c4457aa9c1b2b0761a918021a46a77"
-  integrity sha512-gyGTIf5kgmLDmH7Rwj8vMmNK46bjXKKofHS2gY+LUqoTe/iybVuTuvnhJQR2tZHlKlDG7A/BIH7cRa2jWDKgWw==
+ffmpeg-static@^5.2.0:
+  version "5.3.0"
+  resolved "https://registry.yarnpkg.com/ffmpeg-static/-/ffmpeg-static-5.3.0.tgz#3089fc01d1bb9c58cbe74631986fdacbd86d8b14"
+  integrity sha512-H+K6sW6TiIX6VGend0KQwthe+kaceeH/luE8dIZyOP35ik7ahYojDuqlTV1bOrtEwl01sy2HFNGQfi5IDJvotg==
   dependencies:
     "@derhuerst/http-basic" "^8.2.0"
     env-paths "^2.2.0"

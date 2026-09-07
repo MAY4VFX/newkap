@@ -6,6 +6,7 @@ on:
     branches:
       - 'ci/**'
       - 'feat/**'
+      - 'integration/**'
 
 jobs:
   build:

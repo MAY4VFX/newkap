@@ -32,12 +32,13 @@ test.afterEach.always(t => {
   }
 });
 
-const convert = async (format: Format, options: SetOptional<Except<ConvertOptions, 'outputPath'>, 'onCancel' | 'onProgress' | 'shouldMute'>) => {
+const convert = async (format: Format, options: SetOptional<Except<ConvertOptions, 'outputPath'>, 'onCancel' | 'onProgress' | 'shouldMute' | 'speed'>) => {
   return convertTo(format, {
     defaultFileName: getRandomFileName(format),
     onProgress: sinon.fake(),
     onCancel: sinon.fake(),
     shouldMute: true,
+    speed: 1,
     ...options
   });
 };
@@ -469,4 +470,161 @@ test('HEVC: non-retina', async t => {
   t.is(meta.encoding, 'hevc');
 
   t.false(meta.hasAudio);
+});
+
+// SPEED
+
+test('mp4: speed 2x halves duration, audio stays in sync', async t => {
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: false,
+    inputPath: retinaInput,
+    fps: 30,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 10,
+    shouldCrop: true,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 5));
+  t.true(meta.hasAudio);
+});
+
+test('mp4: speed 0.5x doubles duration, audio stays in sync', async t => {
+  t.context.outputPath = await convert(Format.mp4, {
+    shouldMute: false,
+    inputPath: retinaInput,
+    fps: 30,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 5,
+    shouldCrop: true,
+    speed: 0.5
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 10));
+  t.true(meta.hasAudio);
+});
+
+test('webm: speed 2x halves duration, audio stays in sync', async t => {
+  t.context.outputPath = await convert(Format.webm, {
+    shouldMute: false,
+    inputPath: retinaInput,
+    fps: 30,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 10,
+    shouldCrop: true,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 5));
+  t.true(meta.hasAudio);
+});
+
+test('av1: speed 0.5x doubles duration, audio stays in sync', async t => {
+  t.context.outputPath = await convert(Format.av1, {
+    shouldMute: false,
+    inputPath: retinaInput,
+    fps: 10,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 2,
+    shouldCrop: true,
+    speed: 0.5
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 4));
+  t.true(meta.hasAudio);
+});
+
+test('HEVC: speed 2x halves duration', async t => {
+  t.context.outputPath = await convert(Format.hevc, {
+    shouldMute: true,
+    inputPath: input,
+    fps: 15,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 10,
+    shouldCrop: true,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 5));
+});
+
+test('apng: speed 2x keeps the requested fps', async t => {
+  // APNG's demuxer doesn't report an overall Duration, so this only checks
+  // that the sped-up fps filter chain (setpts,fps,scale) still lands on the
+  // requested output rate rather than the source's.
+  t.context.outputPath = await convert(Format.apng, {
+    shouldMute: false,
+    inputPath: input,
+    fps: 15,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 4,
+    shouldCrop: true,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.is(meta.size.width, 255);
+  t.is(meta.size.height, 143);
+  t.is(meta.fps, 15);
+});
+
+test('gif: speed 2x halves duration (cropped)', async t => {
+  t.context.outputPath = await convert(Format.gif, {
+    inputPath: input,
+    fps: 15,
+    width: 255,
+    height: 143,
+    startTime: 0,
+    endTime: 10,
+    shouldCrop: true,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 5));
+});
+
+// The ffmpeg trim/speed pass used to only run when shouldCrop was set, so an
+// export with speed changed but no crop selected silently ignored speed
+// entirely (gifski read the untouched input directly). Guard against that
+// regression explicitly, with shouldCrop left false.
+test('gif: speed 2x halves duration even without crop', async t => {
+  t.context.outputPath = await convert(Format.gif, {
+    inputPath: input,
+    fps: 15,
+    width: 255,
+    height: 143,
+    startTime: 1,
+    endTime: 6,
+    shouldCrop: false,
+    speed: 2
+  });
+
+  const meta = await getVideoMetadata(t.context.outputPath);
+
+  t.true(almostEquals(meta.duration, 2.5));
 });

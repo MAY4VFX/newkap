@@ -1,5 +1,6 @@
 import moment from 'moment';
 import prettyMilliseconds from 'pretty-ms';
+import {Encoding} from '../common/types';
 
 export interface ConvertOptions {
   inputPath: string;
@@ -17,6 +18,12 @@ export interface ConvertOptions {
     pluginName: string;
     serviceTitle: string;
   };
+  // The source file's own codec/fps, used to decide whether an mp4 export can
+  // skip re-encoding entirely (see the remux fast path in converters/h264.ts).
+  // Optional because callers that don't care about the fast path (tests,
+  // other formats) have no reason to look them up.
+  sourceEncoding?: Encoding;
+  sourceFps?: number;
 }
 
 // GIF frame delays are stored in 1/100s units, so 50fps (2 centiseconds per

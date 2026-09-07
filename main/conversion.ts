@@ -134,6 +134,8 @@ export default class Conversion extends (EventEmitter as new () => TypedEventEmi
         ...this.options,
         defaultFileName: this.video.title,
         inputPath: this.video.filePath,
+        sourceEncoding: this.video.encoding,
+        sourceFps: this.video.fps,
         onProgress: this.onConversionProgress,
         onCancel: () => {
           this.emit('cancel');

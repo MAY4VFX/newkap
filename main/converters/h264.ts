@@ -4,8 +4,21 @@ import {convert, gifski} from './process';
 import {areDimensionsEven, conditionalArgs, ConvertOptions, GIF_MAX_FPS, makeEven} from './utils';
 import {settings} from '../common/settings';
 import os from 'os';
-import {Format} from '../common/types';
+import {Encoding, Format} from '../common/types';
 import fs from 'fs';
+import {isHardwareEncoderAvailable} from '../utils/hardware-encoding';
+
+// VideoToolbox's `-q:v` is a 1-100 quality target (higher = bigger/better),
+// unrelated to libx264/libx265's CRF scale. Measured against this project's
+// software output on real screen recordings: VideoToolbox needs noticeably
+// more bits than libx264/libx265 for the same SSIM on this kind of flat,
+// low-motion UI content (hardware encoders are tuned for camera video, not
+// screen captures), so matching software file size 1:1 costs visible quality.
+// 50 lands on a middle ground verified by measurement — SSIM ~0.98 against
+// the source (software preset lands ~0.996-0.999) at roughly 2.5-4x the
+// software file size, instead of the 5-7x blowup a naive CBR/default bitrate
+// produces. See newkap#2 for the numbers.
+const HARDWARE_QUALITY = '50';
 
 // GIF export: trim the clip with ffmpeg if a range is selected, then encode it
 // with gifski. gifski reads video directly (its bundled binary statically links
@@ -91,33 +104,74 @@ const convertToGif = PCancelable.fn(async (options: ConvertOptions, onCancel: PC
   }
 });
 
-// eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToMp4 = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-r', options.fps.toString(),
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+// Nothing is changing between input and output — same codec, same fps, no
+// crop/trim/mute/edit-plugin pass — so just repackage the stream instead of
+// decoding and re-encoding it. This is the biggest win available: ~1000x
+// faster than any encode, hardware or software.
+const canRemux = (options: ConvertOptions) =>
+  !options.editService &&
+  !options.shouldMute &&
+  !options.shouldCrop &&
+  areDimensionsEven(options) &&
+  options.sourceEncoding === Encoding.h264 &&
+  options.sourceFps === options.fps;
+
+const convertToMp4 = PCancelable.fn(async (options: ConvertOptions, onCancel: PCancelable.OnCancelFunction) => {
+  const processOptions = {
+    onProgress: (progress: number, estimate?: string) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime
+  };
+
+  if (canRemux(options)) {
+    const remuxProcess = convert(options.outputPath, processOptions, conditionalArgs(
+      '-i', options.inputPath,
+      '-c', 'copy',
+      options.outputPath
+    ));
+
+    onCancel(() => {
+      remuxProcess.cancel();
+    });
+
+    return remuxProcess;
+  }
+
+  const canUseHardware = await isHardwareEncoderAvailable('h264_videotoolbox');
+
+  const conversionProcess = convert(options.outputPath, processOptions, conditionalArgs(
+    '-i', options.inputPath,
+    '-r', options.fps.toString(),
+    {
+      args: ['-c:v', 'h264_videotoolbox', '-q:v', HARDWARE_QUALITY],
+      if: canUseHardware
+    },
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        '-ss',
+        options.startTime.toString(),
+        '-to',
+        options.endTime.toString()
+      ],
+      if: options.shouldCrop || !areDimensionsEven(options)
+    },
+    options.outputPath
+  ));
+
+  onCancel(() => {
+    conversionProcess.cancel();
+  });
+
+  return conversionProcess;
+});
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
 const convertToWebm = (options: ConvertOptions) => convert(options.outputPath, {
@@ -194,37 +248,52 @@ const convertToAv1 = (options: ConvertOptions) => convert(options.outputPath, {
   options.outputPath
 ));
 
-// eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToHevc = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-r', options.fps.toString(),
-  '-c:v', 'libx265',
-  '-c:a', 'libopus',
-  '-preset', 'medium',
-  '-tag:v', 'hvc1', // Metadata for macOS
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+const convertToHevc = PCancelable.fn(async (options: ConvertOptions, onCancel: PCancelable.OnCancelFunction) => {
+  const canUseHardware = await isHardwareEncoderAvailable('hevc_videotoolbox');
+
+  const conversionProcess = convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime
+  }, conditionalArgs(
+    '-i', options.inputPath,
+    '-r', options.fps.toString(),
+    {
+      args: ['-c:v', 'hevc_videotoolbox', '-q:v', HARDWARE_QUALITY],
+      if: canUseHardware
+    },
+    {
+      args: ['-c:v', 'libx265', '-preset', 'medium'],
+      if: !canUseHardware
+    },
+    '-c:a', 'libopus',
+    '-tag:v', 'hvc1', // Metadata for macOS
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        '-ss',
+        options.startTime.toString(),
+        '-to',
+        options.endTime.toString()
+      ],
+      if: options.shouldCrop || !areDimensionsEven(options)
+    },
+    options.outputPath
+  ));
+
+  onCancel(() => {
+    conversionProcess.cancel();
+  });
+
+  return conversionProcess;
+});
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
 const convertToApng = (options: ConvertOptions) => convert(options.outputPath, {

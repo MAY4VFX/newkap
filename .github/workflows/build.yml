@@ -41,7 +41,12 @@ jobs:
 
   test:
     name: Test (main process)
-    runs-on: macos-13
+    # test/*.ts mocks electron (via _moduleAliases) and only exercises ffmpeg
+    # on fixtures, so it doesn't need macOS. Runs on ubuntu-latest, which is
+    # far less contended than the macOS runner pool `build` needs, so other
+    # branches always have a fast lane to run their tests independent of any
+    # macOS-runner backlog.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -144,7 +144,7 @@ const convertWithEditPlugin = PCancelable.fn(
           height: options.height,
           format: options.format,
           fps: options.fps,
-          duration: options.endTime - options.startTime,
+          duration: (options.endTime - options.startTime) / options.speed,
           isMuted: options.shouldMute,
           loop: settings.get('loopExports')
         }

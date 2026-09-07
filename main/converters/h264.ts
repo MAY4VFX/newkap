@@ -1,7 +1,7 @@
 import PCancelable from 'p-cancelable';
 import tempy from 'tempy';
 import {convert, gifski} from './process';
-import {areDimensionsEven, conditionalArgs, ConvertOptions, GIF_MAX_FPS, makeEven} from './utils';
+import {areDimensionsEven, buildAtempoFilter, conditionalArgs, ConvertOptions, GIF_MAX_FPS, makeEven} from './utils';
 import {settings} from '../common/settings';
 import os from 'os';
 import {Format} from '../common/types';
@@ -21,13 +21,16 @@ const convertToGif = PCancelable.fn(async (options: ConvertOptions, onCancel: PC
   // 1/100s units; higher rates get mangled into slow motion.
   const fps = Math.min(options.fps, GIF_MAX_FPS);
 
-  // Because gifski can't trim, use ffmpeg to cut the selected range into a
-  // temporary clip when needed; otherwise hand the input straight to gifski.
+  // Because gifski can't trim or change speed, use ffmpeg to cut the
+  // selected range and/or apply the speed filter into a temporary clip when
+  // needed; otherwise hand the input straight to gifski.
+  const hasSpeed = options.speed !== 1;
+
   let gifskiInput = options.inputPath;
   let trimmedPath: string | undefined;
 
   try {
-    if (options.shouldCrop) {
+    if (options.shouldCrop || hasSpeed) {
       trimmedPath = tempy.file({extension: 'mp4'});
 
       const trimProcess = convert(trimmedPath, {
@@ -35,12 +38,19 @@ const convertToGif = PCancelable.fn(async (options: ConvertOptions, onCancel: PC
           options.onProgress('Converting', progress, estimate);
         },
         startTime: options.startTime,
-        endTime: options.endTime
+        endTime: options.endTime,
+        speed: options.speed
       }, conditionalArgs(
+        // setpts rescales the timeline, so once it's in the graph ffmpeg's
+        // auto-inserted trim for an output-side -ss/-to lands *after* it —
+        // trimming the sped-up timeline instead of the original one. Doing
+        // the trim as an input option (before -i) keeps it on the original
+        // timeline regardless of what's in -filter:v.
+        {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed},
         '-i', options.inputPath,
-        '-ss', options.startTime.toString(),
-        '-to', options.endTime.toString(),
+        {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: !hasSpeed && options.shouldCrop},
         '-an', // GIFs have no audio track
+        {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
         // gifski re-quantizes to a 256-colour GIF, so the intermediate quality
         // barely matters — use the fastest x264 preset to keep the trim cheap.
         '-preset', 'ultrafast',
@@ -92,167 +102,204 @@ const convertToGif = PCancelable.fn(async (options: ConvertOptions, onCancel: PC
 });
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToMp4 = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-r', options.fps.toString(),
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+const convertToMp4 = (options: ConvertOptions) => {
+  const hasSpeed = options.speed !== 1;
+  const shouldTrim = options.shouldCrop || !areDimensionsEven(options);
+
+  return convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime,
+    speed: options.speed
+  }, conditionalArgs(
+    // See the comment in convertToGif: an output-side -ss/-to would trim
+    // *after* -filter:v once that's present, so it has to move before -i.
+    {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
+    '-i', options.inputPath,
+    '-r', options.fps.toString(),
+    {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
+    {args: ['-filter:a', buildAtempoFilter(options.speed)], if: hasSpeed && !options.shouldMute},
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        ...(hasSpeed ? [] : ['-ss', options.startTime.toString(), '-to', options.endTime.toString()])
+      ],
+      if: shouldTrim
+    },
+    options.outputPath
+  ));
+};
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToWebm = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  // http://wiki.webmproject.org/ffmpeg
-  // https://trac.ffmpeg.org/wiki/Encode/VP9
-  '-threads', Math.max(os.cpus().length - 1, 1).toString(),
-  '-deadline', 'good', // `best` is twice as slow and only slighty better
-  '-b:v', '1M', // Bitrate (same as the MP4)
-  '-codec:v', 'vp9',
-  '-codec:a', 'vorbis',
-  '-ac', '2', // https://stackoverflow.com/questions/19004762/ffmpeg-covert-from-mp4-to-webm-only-working-on-some-files
-  '-strict', '-2', // Needed because `vorbis` is experimental
-  '-r', options.fps.toString(),
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+const convertToWebm = (options: ConvertOptions) => {
+  const hasSpeed = options.speed !== 1;
+  const shouldTrim = options.shouldCrop || !areDimensionsEven(options);
+
+  return convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime,
+    speed: options.speed
+  }, conditionalArgs(
+    {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
+    '-i', options.inputPath,
+    // http://wiki.webmproject.org/ffmpeg
+    // https://trac.ffmpeg.org/wiki/Encode/VP9
+    '-threads', Math.max(os.cpus().length - 1, 1).toString(),
+    '-deadline', 'good', // `best` is twice as slow and only slighty better
+    '-b:v', '1M', // Bitrate (same as the MP4)
+    '-codec:v', 'vp9',
+    '-codec:a', 'vorbis',
+    '-ac', '2', // https://stackoverflow.com/questions/19004762/ffmpeg-covert-from-mp4-to-webm-only-working-on-some-files
+    '-strict', '-2', // Needed because `vorbis` is experimental
+    '-r', options.fps.toString(),
+    {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
+    {args: ['-filter:a', buildAtempoFilter(options.speed)], if: hasSpeed && !options.shouldMute},
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        ...(hasSpeed ? [] : ['-ss', options.startTime.toString(), '-to', options.endTime.toString()])
+      ],
+      if: shouldTrim
+    },
+    options.outputPath
+  ));
+};
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToAv1 = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-r', options.fps.toString(),
-  '-c:v', 'libaom-av1',
-  '-c:a', 'libopus',
-  '-crf', '34',
-  '-b:v', '0',
-  '-strict', 'experimental',
-  // Enables row-based multi-threading which maximizes CPU usage
-  // https://trac.ffmpeg.org/wiki/Encode/AV1
-  '-cpu-used', '4',
-  '-row-mt', '1',
-  '-tiles', '2x2',
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+const convertToAv1 = (options: ConvertOptions) => {
+  const hasSpeed = options.speed !== 1;
+  const shouldTrim = options.shouldCrop || !areDimensionsEven(options);
+
+  return convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime,
+    speed: options.speed
+  }, conditionalArgs(
+    {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
+    '-i', options.inputPath,
+    '-r', options.fps.toString(),
+    '-c:v', 'libaom-av1',
+    '-c:a', 'libopus',
+    '-crf', '34',
+    '-b:v', '0',
+    '-strict', 'experimental',
+    // Enables row-based multi-threading which maximizes CPU usage
+    // https://trac.ffmpeg.org/wiki/Encode/AV1
+    '-cpu-used', '4',
+    '-row-mt', '1',
+    '-tiles', '2x2',
+    {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
+    {args: ['-filter:a', buildAtempoFilter(options.speed)], if: hasSpeed && !options.shouldMute},
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        ...(hasSpeed ? [] : ['-ss', options.startTime.toString(), '-to', options.endTime.toString()])
+      ],
+      if: shouldTrim
+    },
+    options.outputPath
+  ));
+};
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToHevc = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-r', options.fps.toString(),
-  '-c:v', 'libx265',
-  '-c:a', 'libopus',
-  '-preset', 'medium',
-  '-tag:v', 'hvc1', // Metadata for macOS
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-s',
-      `${makeEven(options.width)}x${makeEven(options.height)}`,
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop || !areDimensionsEven(options)
-  },
-  options.outputPath
-));
+const convertToHevc = (options: ConvertOptions) => {
+  const hasSpeed = options.speed !== 1;
+  const shouldTrim = options.shouldCrop || !areDimensionsEven(options);
+
+  return convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime,
+    speed: options.speed
+  }, conditionalArgs(
+    {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && shouldTrim},
+    '-i', options.inputPath,
+    '-r', options.fps.toString(),
+    '-c:v', 'libx265',
+    '-c:a', 'libopus',
+    '-preset', 'medium',
+    '-tag:v', 'hvc1', // Metadata for macOS
+    {args: ['-filter:v', `setpts=PTS/${options.speed}`], if: hasSpeed},
+    {args: ['-filter:a', buildAtempoFilter(options.speed)], if: hasSpeed && !options.shouldMute},
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-s',
+        `${makeEven(options.width)}x${makeEven(options.height)}`,
+        ...(hasSpeed ? [] : ['-ss', options.startTime.toString(), '-to', options.endTime.toString()])
+      ],
+      if: shouldTrim
+    },
+    options.outputPath
+  ));
+};
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
-const convertToApng = (options: ConvertOptions) => convert(options.outputPath, {
-  onProgress: (progress, estimate) => {
-    options.onProgress('Converting', progress, estimate);
-  },
-  startTime: options.startTime,
-  endTime: options.endTime
-}, conditionalArgs(
-  '-i', options.inputPath,
-  '-vf', `fps=${options.fps}${options.shouldCrop ? `,scale=${options.width}:${options.height}:flags=lanczos` : ''}`,
-  // Strange for APNG instead of -loop it uses -plays see: https://stackoverflow.com/questions/43795518/using-ffmpeg-to-create-looping-apng
-  '-plays', settings.get('loopExports') ? '0' : '1', // 0 == forever; 1 == no loop
-  {
-    args: ['-an'],
-    if: options.shouldMute
-  },
-  {
-    args: [
-      '-ss',
-      options.startTime.toString(),
-      '-to',
-      options.endTime.toString()
-    ],
-    if: options.shouldCrop
-  },
-  options.outputPath
-));
+const convertToApng = (options: ConvertOptions) => {
+  const hasSpeed = options.speed !== 1;
+  // setpts has to come first in the chain so fps resamples the already
+  // sped-up timeline, not the original one.
+  const videoFilter = `${hasSpeed ? `setpts=PTS/${options.speed},` : ''}fps=${options.fps}${options.shouldCrop ? `,scale=${options.width}:${options.height}:flags=lanczos` : ''}`;
+
+  return convert(options.outputPath, {
+    onProgress: (progress, estimate) => {
+      options.onProgress('Converting', progress, estimate);
+    },
+    startTime: options.startTime,
+    endTime: options.endTime,
+    speed: options.speed
+  }, conditionalArgs(
+    // See the comment in convertToGif: an output-side -ss/-to would trim
+    // *after* -vf once it contains setpts, so it has to move before -i.
+    {args: ['-ss', options.startTime.toString(), '-to', options.endTime.toString()], if: hasSpeed && options.shouldCrop},
+    '-i', options.inputPath,
+    '-vf', videoFilter,
+    // Strange for APNG instead of -loop it uses -plays see: https://stackoverflow.com/questions/43795518/using-ffmpeg-to-create-looping-apng
+    '-plays', settings.get('loopExports') ? '0' : '1', // 0 == forever; 1 == no loop
+    {
+      args: ['-an'],
+      if: options.shouldMute
+    },
+    {
+      args: [
+        '-ss',
+        options.startTime.toString(),
+        '-to',
+        options.endTime.toString()
+      ],
+      if: !hasSpeed && options.shouldCrop
+    },
+    options.outputPath
+  ));
+};
 
 // eslint-disable-next-line @typescript-eslint/promise-function-async
 export const crop = (options: ConvertOptions) => convert(options.outputPath, {

@@ -7,6 +7,7 @@ import VideoControlsContainer from './video-controls-container';
 import useEditorOptions, {EditorOptionsState} from 'hooks/editor/use-editor-options';
 import {Format, App} from 'common/types';
 import useEditorWindowState from 'hooks/editor/use-editor-window-state';
+import {DEFAULT_SPEED} from './options/speed-slider';
 
 type EditService = EditorOptionsState['editServices'][0];
 
@@ -31,12 +32,13 @@ const useOptions = () => {
   } = useEditorOptions();
 
   const metadata = VideoMetadataContainer.useContainer();
-  const {isMuted, mute, unmute} = VideoControlsContainer.useContainer();
+  const {isMuted, mute, unmute, setPlaybackRate} = VideoControlsContainer.useContainer();
 
   const [format, setFormat] = useState<Format>();
   const [fps, setFps] = useState<number>();
   const [width, setWidth] = useState<number>();
   const [height, setHeight] = useState<number>();
+  const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
   const [editPlugin, setEditPlugin] = useState<EditService>();
   const [sharePlugin, setSharePlugin] = useState<SharePlugin>();
 
@@ -57,6 +59,11 @@ const useOptions = () => {
 
   const updateSharePlugin = (plugin: SharePlugin) => {
     setSharePlugin(plugin);
+  };
+
+  const updateSpeed = (newSpeed: number) => {
+    setSpeed(newSpeed);
+    setPlaybackRate(newSpeed);
   };
 
   const updateFormat = (formatName: Format) => {
@@ -134,6 +141,7 @@ const useOptions = () => {
     format,
     fps,
     originalFps,
+    speed,
     editPlugin,
     formats,
     editServices,
@@ -141,6 +149,7 @@ const useOptions = () => {
     updateSharePlugin,
     updateFps,
     updateFormat,
+    updateSpeed,
     setEditPlugin,
     setDimensions
   };

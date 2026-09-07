@@ -11,6 +11,7 @@ export interface ConvertOptions {
   height: number;
   fps: number;
   shouldMute: boolean;
+  speed: number;
   onCancel: () => void;
   onProgress: (action: string, progress: number, estimate?: string) => void;
   editService?: {
@@ -26,6 +27,29 @@ export interface ConvertOptions {
 export const GIF_MAX_FPS = 50;
 
 export const makeEven = (number: number) => 2 * Math.round(number / 2);
+
+// ffmpeg's atempo filter only accepts a 0.5-100 range per instance, so
+// speeds outside that (only sub-0.5 speeds, given our 0.25-20 UI range) need
+// to be built as a chain of multiple atempo stages that multiply out to the
+// requested speed.
+export const buildAtempoFilter = (speed: number): string => {
+  const stages: number[] = [];
+  let remaining = speed;
+
+  while (remaining < 0.5) {
+    stages.push(0.5);
+    remaining /= 0.5;
+  }
+
+  while (remaining > 100) {
+    stages.push(100);
+    remaining /= 100;
+  }
+
+  stages.push(remaining);
+
+  return stages.map(stage => `atempo=${stage}`).join(',');
+};
 
 export const areDimensionsEven = ({width, height}: {width: number; height: number}) => width % 2 === 0 && height % 2 === 0;
 

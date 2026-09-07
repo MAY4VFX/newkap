@@ -141,6 +141,7 @@ const ConvertButton = () => {
         fps: options.fps,
         shouldMute: isMuted,
         shouldCrop,
+        speed: options.speed,
         editService: options.editPlugin ? {
           pluginName: options.editPlugin.pluginName,
           serviceTitle: options.editPlugin.title

@@ -1,12 +1,16 @@
 import css from 'styled-jsx/css';
 import KeyboardNumberInput from '../../keyboard-number-input';
 import Slider from './slider';
+import SpeedSlider from './speed-slider';
 import OptionsContainer from '../options-container';
 import {useState, useEffect, useMemo} from 'react';
 import * as stringMath from 'string-math';
 import VideoMetadataContainer from '../video-metadata-container';
+import VideoTimeContainer from '../video-time-container';
+import {MAX_PREVIEW_PLAYBACK_RATE} from '../video-controls-container';
 import {shake} from '../../../utils/inputs';
 import Select, {Separator} from './select';
+import formatTime from '../../../utils/format-time';
 
 const percentValues = [100, 75, 50, 33, 25, 20, 10];
 
@@ -40,8 +44,9 @@ const {className: keyboardInputClass, styles: keyboardInputStyles} = css.resolve
 `;
 
 const LeftOptions = () => {
-  const {width, height, setDimensions, fps, updateFps, originalFps} = OptionsContainer.useContainer();
+  const {width, height, setDimensions, fps, updateFps, originalFps, speed, updateSpeed} = OptionsContainer.useContainer();
   const metadata = VideoMetadataContainer.useContainer();
+  const {startTime, endTime} = VideoTimeContainer.useContainer();
 
   const [widthValue, setWidthValue] = useState<string>();
   const [heightValue, setHeightValue] = useState<string>();
@@ -192,6 +197,14 @@ const LeftOptions = () => {
       <div className="fps">
         <Slider value={fps} min={5} max={originalFps} onChange={updateFps}/>
       </div>
+      <div className="label">Speed</div>
+      <div className="speed">
+        <SpeedSlider value={speed} onChange={updateSpeed}/>
+      </div>
+      <div className="duration" title={speed > MAX_PREVIEW_PLAYBACK_RATE ? `Preview is capped at ${MAX_PREVIEW_PLAYBACK_RATE}x — the export itself still renders at ${speed}x` : undefined}>
+        {formatTime((endTime - startTime) / speed, {showMilliseconds: false})}
+        {speed > MAX_PREVIEW_PLAYBACK_RATE && <span className="clamp-note">*</span>}
+      </div>
       {keyboardInputStyles}
       <style jsx>{`
           .container {
@@ -216,6 +229,23 @@ const LeftOptions = () => {
           .fps {
             height: 24px;
             width: 32px;
+          }
+
+          .speed {
+            height: 24px;
+            width: 40px;
+          }
+
+          .duration {
+            font-size: 12px;
+            color: white;
+            margin-left: 8px;
+            white-space: nowrap;
+          }
+
+          .clamp-note {
+            color: var(--kap);
+            margin-left: 2px;
           }
 
           .option {

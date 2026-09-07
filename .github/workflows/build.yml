@@ -10,7 +10,10 @@ on:
 jobs:
   build:
     name: Build unsigned DMG (arm64)
-    runs-on: macos-13
+    # macos-13 was retired by GitHub and silently leaves jobs queued forever
+    # with no runner assigned (no error). macos-latest is arm64, so this is
+    # also now a native build instead of a cross-arch one.
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,14 +42,13 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
-  test:
-    name: Test (main process)
-    # test/*.ts mocks electron (via _moduleAliases) and only exercises ffmpeg
-    # on fixtures, so it doesn't need macOS. Runs on ubuntu-latest, which is
-    # far less contended than the macOS runner pool `build` needs, so other
-    # branches always have a fast lane to run their tests independent of any
-    # macOS-runner backlog.
-    runs-on: ubuntu-latest
+  test-gifski:
+    name: Test (gifski)
+    # The `gif:` tests in test/convert.ts exercise the vendored gifski
+    # binary (scripts/download-gifski.js), which only has a macOS build
+    # upstream (ImageOptim/gifski ships one universal darwin tar.xz, no
+    # Linux asset). Everything else runs on ubuntu in test.yml.
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,5 +61,5 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Run main-process tests
-        run: yarn test:main
+      - name: Run gifski tests
+        run: yarn test:main --match='gif:*'

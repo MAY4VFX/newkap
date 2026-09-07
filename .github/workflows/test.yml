@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - 'ci/**'
+      - 'feat/**'
+
+jobs:
+  test:
+    name: Test (main process)
+    # electron is mocked (_moduleAliases) and video conversion tests only
+    # need ffmpeg, which ffmpeg-static ships a Linux binary for, so this
+    # doesn't need a macOS runner. Kept separate from build.yml so this
+    # stays on the (fast, uncontended) ubuntu pool and never queues behind
+    # a macOS DMG build.
+    #
+    # Exception: the `gif:` tests exercise the vendored gifski binary
+    # (scripts/download-gifski.js), which is a macOS-only build with no
+    # Linux equivalent available upstream - see the `test-gifski` job in
+    # build.yml, which runs those on macOS instead.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        # --ignore-platform: several deps (mac-windows, macos-audio-devices,
+        # mac-open-with, node-mac-app-icon) are darwin-only and yarn refuses
+        # to install them on Linux by default. Scripts stay enabled - the
+        # ffmpeg-static and gifski binaries these tests need are fetched by
+        # postinstall.
+        run: yarn install --frozen-lockfile --ignore-platform
+
+      - name: Run main-process tests (excluding gifski)
+        run: yarn test:main --match='!gif:*'
